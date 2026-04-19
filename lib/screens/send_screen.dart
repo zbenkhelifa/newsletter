@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:provider/provider.dart';
+import 'package:intl/intl.dart';
 import 'package:flutter_widget_from_html_core/flutter_widget_from_html_core.dart';
 import '../providers/app_provider.dart';
 import '../models/campaign.dart';
@@ -28,12 +29,27 @@ class _SendScreenState extends State<SendScreen> {
   int _skipped = 0;
   final List<({String text, Color color})> _log = [];
   final _scrollCtrl = ScrollController();
+  final _dateFmt = DateFormat('dd/MM/yyyy');
+
+  void _onCampaignChanged(Campaign? c) {
+    if (c == null) return;
+    setState(() {
+      _selectedCampaign = c;
+      // auto-select today's template if available
+      final today = c.todayTemplate;
+      if (today != null) {
+        _templateIndex = c.scheduledTemplates.indexOf(today);
+      } else {
+        _templateIndex = 0;
+      }
+    });
+  }
 
   Future<String> _getBodyTemplate() async {
     final c = _selectedCampaign!;
-    if (c.templateFiles.isNotEmpty) {
-      final idx = _templateIndex.clamp(0, c.templateFiles.length - 1);
-      return await TemplateService.loadHtmlFile(c.templateFiles[idx]);
+    if (c.scheduledTemplates.isNotEmpty) {
+      final idx = _templateIndex.clamp(0, c.scheduledTemplates.length - 1);
+      return await TemplateService.loadHtmlFile(c.scheduledTemplates[idx].filePath);
     }
     return c.bodyTemplate;
   }
@@ -353,37 +369,50 @@ class _SendScreenState extends State<SendScreen> {
                               child: Text(c.name,
                                   overflow: TextOverflow.ellipsis)))
                           .toList(),
-                      onChanged: (c) => setState(() {
-                        _selectedCampaign = c;
-                        _templateIndex = 0;
-                      }),
+                      onChanged: _onCampaignChanged,
                       hint: const Text('Sélectionner...'),
                     ),
                     if (_selectedCampaign != null) ...[
                       const SizedBox(height: 16),
                       _CampaignInfo(campaign: _selectedCampaign!, app: app),
-                      if (_selectedCampaign!.templateFiles.length > 1) ...[
+                      if (_selectedCampaign!.scheduledTemplates.length > 1) ...[
                         const SizedBox(height: 16),
-                        _sectionTitle('2. Template'),
+                        _sectionTitle('2. Newsletter à envoyer'),
+                        const SizedBox(height: 8),
+                        _TodayBanner(campaign: _selectedCampaign!, dateFmt: _dateFmt),
                         const SizedBox(height: 8),
                         // ignore: deprecated_member_use
                         DropdownButtonFormField<int>(
                           value: _templateIndex,
                           decoration: const InputDecoration(
-                              labelText: 'Fichier template',
+                              labelText: 'Sélectionner la newsletter',
                               border: OutlineInputBorder()),
-                          items: _selectedCampaign!.templateFiles
+                          items: _selectedCampaign!.scheduledTemplates
                               .asMap()
                               .entries
-                              .map((e) => DropdownMenuItem(
-                                  value: e.key,
-                                  child: Text(
-                                      '${e.key + 1}. ${e.value.split('/').last}',
-                                      overflow: TextOverflow.ellipsis)))
+                              .map((e) {
+                                final t = e.value;
+                                final today = DateTime.now();
+                                final isToday = t.sendDate != null &&
+                                    t.sendDate!.year == today.year &&
+                                    t.sendDate!.month == today.month &&
+                                    t.sendDate!.day == today.day;
+                                final dateStr = t.sendDate != null
+                                    ? (isToday ? "Aujourd'hui" : _dateFmt.format(t.sendDate!))
+                                    : 'Sans date';
+                                return DropdownMenuItem(
+                                    value: e.key,
+                                    child: Text(
+                                        '${e.key + 1}. ${t.fileName}  [$dateStr]',
+                                        overflow: TextOverflow.ellipsis));
+                              })
                               .toList(),
                           onChanged: (v) =>
                               setState(() => _templateIndex = v ?? 0),
                         ),
+                      ] else if (_selectedCampaign!.scheduledTemplates.length == 1) ...[
+                        const SizedBox(height: 12),
+                        _TodayBanner(campaign: _selectedCampaign!, dateFmt: _dateFmt),
                       ],
                       const SizedBox(height: 20),
                       _sectionTitle('3. Prévisualiser'),
@@ -564,8 +593,8 @@ class _CampaignInfo extends StatelessWidget {
                   ? '${list.name} (${list.validCount})'
                   : 'Non trouvé'),
           _info('Sujet', campaign.subjectTemplate),
-          if (campaign.templateFiles.isNotEmpty)
-            _info('Templates', '${campaign.templateFiles.length} fichier(s)'),
+          if (campaign.scheduledTemplates.isNotEmpty)
+            _info('Newsletters', '${campaign.scheduledTemplates.length} fichier(s)'),
         ],
       ),
     );
@@ -586,6 +615,86 @@ class _CampaignInfo extends StatelessWidget {
           ],
         ),
       );
+}
+
+class _TodayBanner extends StatelessWidget {
+  final Campaign campaign;
+  final DateFormat dateFmt;
+
+  const _TodayBanner({required this.campaign, required this.dateFmt});
+
+  @override
+  Widget build(BuildContext context) {
+    final today = campaign.todayTemplate;
+    final next = campaign.nextTemplate;
+
+    if (today != null) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.green.withValues(alpha: 0.08),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.green.withValues(alpha: 0.35)),
+        ),
+        child: Row(children: [
+          const Icon(Icons.today, size: 16, color: Colors.green),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Newsletter du jour : ${today.fileName}',
+              style: const TextStyle(
+                  fontSize: 12,
+                  color: Colors.green,
+                  fontWeight: FontWeight.bold),
+            ),
+          ),
+        ]),
+      );
+    }
+
+    if (next != null) {
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.blue.withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.blue.withValues(alpha: 0.2)),
+        ),
+        child: Row(children: [
+          const Icon(Icons.schedule, size: 16, color: Colors.blue),
+          const SizedBox(width: 8),
+          Expanded(
+            child: Text(
+              'Prochaine : ${next.fileName} le ${dateFmt.format(next.sendDate!)}',
+              style: const TextStyle(fontSize: 12, color: Colors.blue),
+            ),
+          ),
+        ]),
+      );
+    }
+
+    if (campaign.scheduledTemplates.isNotEmpty) {
+      final hasAnyDate =
+          campaign.scheduledTemplates.any((t) => t.sendDate != null);
+      if (!hasAnyDate) return const SizedBox.shrink();
+      return Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+        decoration: BoxDecoration(
+          color: Colors.grey.withValues(alpha: 0.06),
+          borderRadius: BorderRadius.circular(8),
+          border: Border.all(color: Colors.grey.withValues(alpha: 0.3)),
+        ),
+        child: const Row(children: [
+          Icon(Icons.info_outline, size: 16, color: Colors.grey),
+          SizedBox(width: 8),
+          Text('Aucune newsletter prévue aujourd\'hui.',
+              style: TextStyle(fontSize: 12, color: Colors.grey)),
+        ]),
+      );
+    }
+
+    return const SizedBox.shrink();
+  }
 }
 
 class _DedupeInfo extends StatelessWidget {
